@@ -1,0 +1,41 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{246FF684-8F35-43CC-8F90-356C431BA61E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Traffic.Core.Tests", "src\Traffic.Core.Tests\Traffic.Core.Tests.csproj", "{B09FA959-CC5A-4EA7-AA56-79F5BF67CFB3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Traffic.Core", "src\Traffic.Core\Traffic.Core.csproj", "{29F38E88-F679-42D2-BBC5-6CCB9C17006C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RoadTrafficSim", "src\Traffic.EngineClient\RoadTrafficSim.csproj", "{5C831334-BE22-410D-83E1-0188105123CF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B09FA959-CC5A-4EA7-AA56-79F5BF67CFB3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B09FA959-CC5A-4EA7-AA56-79F5BF67CFB3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B09FA959-CC5A-4EA7-AA56-79F5BF67CFB3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B09FA959-CC5A-4EA7-AA56-79F5BF67CFB3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{29F38E88-F679-42D2-BBC5-6CCB9C17006C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{29F38E88-F679-42D2-BBC5-6CCB9C17006C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{29F38E88-F679-42D2-BBC5-6CCB9C17006C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{29F38E88-F679-42D2-BBC5-6CCB9C17006C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5C831334-BE22-410D-83E1-0188105123CF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5C831334-BE22-410D-83E1-0188105123CF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5C831334-BE22-410D-83E1-0188105123CF}.Release|Any CPU.ActiveCfg = Debug|Any CPU
+		{5C831334-BE22-410D-83E1-0188105123CF}.Release|Any CPU.Build.0 = Debug|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{B09FA959-CC5A-4EA7-AA56-79F5BF67CFB3} = {246FF684-8F35-43CC-8F90-356C431BA61E}
+		{29F38E88-F679-42D2-BBC5-6CCB9C17006C} = {246FF684-8F35-43CC-8F90-356C431BA61E}
+		{5C831334-BE22-410D-83E1-0188105123CF} = {246FF684-8F35-43CC-8F90-356C431BA61E}
+	EndGlobalSection
+EndGlobal
