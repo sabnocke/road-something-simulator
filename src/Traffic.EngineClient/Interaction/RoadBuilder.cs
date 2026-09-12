@@ -1,6 +1,9 @@
 //TODO add all colors into a common class
 //TODO maybe move common functions into a class and inherit from it
 
+using Traffic.Core.Kinematics;
+using Traffic.Core.Simulation;
+
 namespace RoadTrafficSim.Interaction;
 
 using System;
@@ -14,6 +17,7 @@ public partial class RoadBuilder : Node3D
 {
 	[Export] public Camera3D Camera { get; set; } = null!;
 	[Export] public float SnapRadius { get; set; } = 8.0f;
+	[Export] public float RoadHalfWidth { get; set; } = 3.5f;
 	
 	public RoadGraph Graph { get; } = new();
 	public bool IsBuildModeActive { get; set; } = true;
@@ -22,6 +26,8 @@ public partial class RoadBuilder : Node3D
 	private RoadNode? _snappedNode;
 	private RoadNode? _pendingStartNode;
 	private Vector3? _currentHoverPoint;
+	private Numerics.Vector3? _lastExitDirection;
+	private CircuitSimulation? _sim;
 #nullable disable
 	
 	private ImmediateMesh _immediateMesh = null!;
@@ -133,78 +139,69 @@ public partial class RoadBuilder : Node3D
 		{
 			// First click: pick or place starting anchor
 			_pendingStartNode = _snappedNode ?? Graph.CreateNode(currentSysPos);
+			_lastExitDirection = null;
+			GD.Print($"Started road chain at Node {_pendingStartNode.Id}");
 		}
 		else
 		{
 			// Reject clicking the exact same node twice without moving
-			if (_snappedNode != null && _snappedNode.Id == _pendingStartNode.Id)
+			if (_snappedNode != null && _snappedNode.Id == _pendingStartNode.Id) 
+			{
+				GD.Print("Ignored click: snapped to current start node.");
 				return;
+			}
+			
+			var endNode = _snappedNode ?? Graph.CreateNode(currentSysPos);
+			var closedLoop = _snappedNode != null;
 
-			RoadNode endNode;
-			var closedLoop = false;
-
-			if (_snappedNode != null)
+			var chord = endNode.Position - _pendingStartNode.Position;
+			var chordLength = chord.Length();
+			if (chordLength < 0.1f)
 			{
-				endNode = _snappedNode;
-				closedLoop = true;
+				GD.PrintErr($"Segment rejected: chord length too short ({chordLength:F3}m).");
+				return;
+			}
+
+			var handleLength = chordLength * 0.4f;
+
+			// Start handle: inherit from previous exit vector if chaining, otherwise follow chord
+			var startDir = _lastExitDirection ?? Numerics.Vector3.Normalize(chord);
+			var startHandle = startDir * handleLength;
+			
+			// End handle: points back along the approach vector
+			Numerics.Vector3 endHandle;
+			if (closedLoop)
+			{
+				// Align with the existing road leaving this node: P2 must point opposite to P1 of the first segment
+				var targetOutgoing = Graph.GetNodeOutgoingTangent(endNode.Id);
+				var approachDir = targetOutgoing ?? Numerics.Vector3.Normalize(chord);
+				endHandle = -approachDir * handleLength;
 			}
 			else
 			{
-				endNode = Graph.CreateNode(currentSysPos);
+				var approachDir = Numerics.Vector3.Normalize(chord);
+				endHandle = -approachDir * handleLength;
+				_lastExitDirection = approachDir;
 			}
 
-			var delta = endNode.Position - _pendingStartNode.Position;
-			var handleLength = delta.Length() * 0.33f;
-			var dir = Numerics.Vector3.Normalize(delta);
-
-			Graph.CreateSegment(_pendingStartNode.Id, endNode.Id, dir * handleLength, -dir * handleLength);
+			var segment = Graph.CreateSegment(_pendingStartNode.Id, endNode.Id, startHandle, endHandle);
+			GD.Print($"Created segment {segment.Id}: {_pendingStartNode.Id} -> {endNode.Id}. Total segments: {Graph.Segments.Count}");
 			
-			// Close loop ends the chain; snapping to new road continues it
-			_pendingStartNode = closedLoop ? null : endNode;
+			// _pendingStartNode = closedLoop ? null : endNode;
 			_snappedNode = null;
-		}
-		
-		/*var clickedSysVec = new Numerics.Vector3(
-			_currentHoverPoint.Value.X, 
-			_currentHoverPoint.Value.Y,
-			_currentHoverPoint.Value.Z
-		);
-
-		if (_pendingStartNode == null)
-		{
-			// Start a chain from an existing snapped node, or create a new node
-			_pendingStartNode = _snappedNode ?? Graph.CreateNode(clickedSysVec);
-		}
-		else
-		{
-			RoadNode endNode;
-			var isCircuitClosed = false;
-
-			if (_snappedNode != null)
+			if (closedLoop)
 			{
-				// Connect to the existing node to close a loop or form an intersection
-				endNode = _snappedNode;
-				isCircuitClosed = true;
+				_lastExitDirection = null;
+				_pendingStartNode = null;
+				TryStartCircuitSimulation();
 			}
 			else
 			{
-				// Plant a brand-new node
-				endNode = Graph.CreateNode(clickedSysVec);
+				_pendingStartNode = endNode;
 			}
-
-			var delta = endNode.Position - _pendingStartNode.Position;
-			var handleLength = delta.Length() * 0.33f;
-			var dir = Numerics.Vector3.Normalize(delta);
-
-			var startHandle = dir * handleLength;
-			var endHandle = -dir * handleLength;
-
-			Graph.CreateSegment(_pendingStartNode.Id, endNode.Id, startHandle, endHandle);
 			
-			// If circuit is closed, terminate placement; otherwise continue chaining
-			_pendingStartNode = isCircuitClosed ? null : endNode;
-			_snappedNode = null;
-		}*/
+			
+		}
 		
 		Redraw();
 	}
@@ -221,13 +218,48 @@ public partial class RoadBuilder : Node3D
 		// Reset state
 		_pendingStartNode = null;
 		_currentHoverPoint = null;
+		_lastExitDirection = null;
 		
 		// Create a clean graph
 		var newGraph = new RoadGraph();
 		//TODO add Clear() method to RoadGraph
 		_immediateMesh.ClearSurfaces();
 	}
-	
+
+	private void TriggerAgentRender()
+	{
+		if (_sim == null) 
+			return;
+		
+		foreach (var agent in _sim.Agents)
+		{
+			var (seg, localDist) = _sim.Route.ResolvePosition(agent.DistanceAlongSpline);
+			var center = seg.Centerline.EvaluateAtDistance(localDist).ToGodot();
+			var forward = seg.Centerline.EvaluateTangentAtDistance(localDist).ToGodot();
+			var right = forward.Cross(Vector3.Up).Normalized();
+
+			var halfLen = agent.Length * 0.5f;
+			var halfWid = 1.0f;
+			
+			var p1 = center + forward * halfLen + right * halfWid;
+			var p2 = center + forward * halfLen - right * halfWid;
+			var p3 = center  - forward * halfLen - right * halfWid;
+			var p4 = center - forward * halfLen - right * halfWid;
+
+			DrawLine(p1, p2);
+			DrawLine(p2, p3);
+			DrawLine(p3, p4);
+			DrawLine(p4, p1);
+
+			return;
+
+			void DrawLine(Vector3 start, Vector3 end)
+			{
+				SurfaceSetColorVertex(Utils.Colors.Yellow(), start);
+				SurfaceSetColorVertex(Utils.Colors.Yellow(), end);
+			}
+		}
+	}
 	
 	private void Redraw()
 	{
@@ -245,42 +277,61 @@ public partial class RoadBuilder : Node3D
 		
 		// Draw confirmed roads in the graph
 		foreach (var segment in Graph.Segments)
-			DrawSpline(segment.Centerline, new Color(0.2f, 0.8f, 1f)); // Cyan
+		{
+			DrawRoadWithBorders(
+				segment.Centerline,
+				centerColor:  Utils.Colors.Cyan(0.5f), // Dim cyan center
+				borderColor: Utils.Colors.White() // White road borders 
+			);
+		}
 		
 		// Draw confirmed nodes
 		foreach (var node in Graph.Nodes)
-			DrawCross(node.Position.ToGodot(), 1.5f, new Color(1.0f, 0.2f, 0.2f)); // Red
+			DrawCross(node.Position.ToGodot(), 1.5f, Utils.Colors.Red());
 
 		
 		
 		// Draw live preview spline when dragging
 		if (_pendingStartNode != null && _currentHoverPoint.HasValue)
 		{
-			GD.Print("Triggered preview spline.");
+			// GD.Print("Triggered preview spline.");
 			var p0 = _pendingStartNode.Position;
 			var p3 = new Numerics.Vector3(_currentHoverPoint.Value.X, _currentHoverPoint.Value.Y, _currentHoverPoint.Value.Z);
-			var delta = p3 - p0;
+			var chord = p3 - p0;
 
-			if (delta.LengthSquared() > 0.05f)
+			if (chord.LengthSquared() > 0.05f)
 			{
-				GD.Print("Actually attempted to draw it.");
-				var handleLen = delta.Length() * 0.33f;
-				var dir = Numerics.Vector3.Normalize(delta);
-				var previewCurve = new BezierCurve3D(p0, p0 + dir * handleLen, p3 - dir * handleLen, p3);
+				// GD.Print("Actually attempted to draw it.");
+				var handleLen = chord.Length() * 0.4f;
+				var startDir = _lastExitDirection ?? Numerics.Vector3.Normalize(chord);
+				var approachDir = Numerics.Vector3.Normalize(chord);
+
+				var previewCurve = new BezierCurve3D(
+					p0,
+					p0 + startDir * handleLen,
+					p3 - approachDir * handleLen,
+					p3
+				);
 				
-				DrawSpline(previewCurve, new Color(1f, 1f, 0.2f, 0.7f));
+				DrawRoadWithBorders(
+					previewCurve,
+					centerColor: Utils.Colors.Yellow(0.4f), // new Color(1.0f, 1.0f, 0.2f, 0.4f),
+					borderColor: Utils.Colors.Yellow(0.9f)
+				);
 			}
 		}
 		
 		if (_snappedNode != null)
 		{
-			DrawDiamond(_snappedNode.Position.ToGodot(), 3.5f, new Color(0.2f, 1.0f, 0.3f));
+			DrawDiamond(_snappedNode.Position.ToGodot(), 3.5f, Utils.Colors.RadiantGreen());
 			// Bright green snap indicator
 		} else if (_currentHoverPoint.HasValue)
 		{
 			// Small white dot at cursor ground contact
-			DrawCross(_currentHoverPoint.Value, 0.8f, new Color(1f, 1f, 1f, 0.6f));
+			DrawCross(_currentHoverPoint.Value, 0.8f, Utils.Colors.White(0.6f));
 		}
+		
+		TriggerAgentRender();
 		
 		_immediateMesh.SurfaceEnd();
 	}
@@ -308,10 +359,8 @@ public partial class RoadBuilder : Node3D
 
 		void Line(Vector3 from, Vector3 to)
 		{
-			_immediateMesh.SurfaceSetColor(color);
-			_immediateMesh.SurfaceAddVertex(from);
-			_immediateMesh.SurfaceSetColor(color);
-			_immediateMesh.SurfaceAddVertex(to);
+			SurfaceSetColorVertex(color, from);
+			SurfaceSetColorVertex(color, to);
 		}
 	}
 
@@ -331,10 +380,85 @@ public partial class RoadBuilder : Node3D
 		
 		void AddEdge(Vector3 a, Vector3 b)
 		{
-			_immediateMesh.SurfaceSetColor(color);
-			_immediateMesh.SurfaceAddVertex(a);
-			_immediateMesh.SurfaceSetColor(color);
-			_immediateMesh.SurfaceAddVertex(b);
+			SurfaceSetColorVertex(color, a);
+			SurfaceSetColorVertex(color, b);
 		}
+	}
+
+	private void SurfaceSetColorVertex(Color color, Vector3 vertex)
+	{
+		_immediateMesh.SurfaceSetColor(color);
+		_immediateMesh.SurfaceAddVertex(vertex);
+	}
+	
+	private void DrawRoadWithBorders(BezierCurve3D spline, Color centerColor, Color borderColor, int steps = 40)
+	{
+		var stepSize = 1.0f / steps;
+		
+		// Evaluate initial step
+		var c0 = spline.Evaluate(0f).ToGodot();
+		var t0 = spline.EvaluateTangent(0f).ToGodot();
+		var n0 = t0.Cross(Vector3.Up).Normalized();
+
+		var left0 = c0 - n0 * RoadHalfWidth;
+		var right0 = c0 + n0 * RoadHalfWidth;
+
+		for (var i = 1; i <= steps; i++)
+		{
+			var t = i * stepSize;
+			var c1 = spline.Evaluate(t).ToGodot();
+			var t1 = spline.EvaluateTangent(t).ToGodot();
+			var n1 = t1.Cross(Vector3.Up).Normalized();
+			
+			var left1 = c1 - n1 * RoadHalfWidth;
+			var right1 = c1 + n1 * RoadHalfWidth;
+			
+			// Center dashed/solid line
+			SurfaceSetColorVertex(centerColor, c0);
+			SurfaceSetColorVertex(centerColor, c1);
+			
+			// Left curb border
+			SurfaceSetColorVertex(borderColor, left0);
+			SurfaceSetColorVertex(borderColor, left1);
+			
+			// Right curb border
+			SurfaceSetColorVertex(borderColor, right0);
+			SurfaceSetColorVertex(borderColor, right1);
+
+			c0 = c1;
+			left0 = left1;
+			right0 = right1;
+		}
+	}
+
+	public void TryStartCircuitSimulation()
+	{
+		var route = Graph.ExtractClosedCircuit();
+		if (route == null)
+		{
+			GD.Print("Couldn't find a valid closed loop.");
+			GD.Print($"Segments: {Graph.Segments.Count}; Nodes: {Graph.Nodes.Count}");
+			foreach (var seg in Graph.Segments)
+			{
+				GD.Print($"  Seg {seg.Id}: {seg.StartNodeId} -> {seg.EndNodeId}");
+			}
+			return;
+		}
+
+		_sim = new CircuitSimulation(route);
+
+		_sim.SpawnAgent(route.TotalLength * 0.75f, 8f, new IdmParameters(desiredSpeed: 10f));
+		_sim.SpawnAgent(route.TotalLength * 0.5f, 14f, new IdmParameters(desiredSpeed: 18f));
+		_sim.SpawnAgent(route.TotalLength * 0.25f, 14f, new IdmParameters(desiredSpeed: 16f));
+		_sim.SpawnAgent(0, 12f, new IdmParameters(desiredSpeed: 15f));
+		
+		GD.Print($"Circuit simulation started! Track length: {route.TotalLength:F1}m, Agents: {_sim.Agents.Count}");
+	}
+
+	public override void _Process(double delta)
+	{
+		if (_sim == null) return;
+		_sim.Step((float)delta);
+		Redraw();
 	}
 }

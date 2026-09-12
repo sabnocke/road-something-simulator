@@ -12,6 +12,20 @@ public class Agent(float startDistance, float initialSpeed, IdmParameters idm)
     public float Length { get; } = 4.5f;                                // Vehicle physical length // TODO add option to change this
     public IdmParameters Idm { get; } = idm;
 
+    public void StepWithExplicitLeader(float dt, float length, float? netGap, float? leaderSpeed)
+    {
+        if (netGap == null || leaderSpeed == null)
+            return;
+        
+        var accel = VehicleKinematics.CalculateAcceleration(Speed, Idm, netGap, leaderSpeed);
+        
+        Speed = Math.Max(0f, Speed + accel * dt);
+        DistanceAlongSpline += Speed * dt;
+        
+        if (DistanceAlongSpline > length)
+            DistanceAlongSpline -= length;
+    }
+    
     public void Step(float dt, BezierCurve3D spline, Agent? leader)
     {
         float? netGap = null;
